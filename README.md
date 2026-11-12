@@ -19,6 +19,8 @@ server/Dockerfile      容器构建
 static/                前端页面与静态资源
 nginx.conf             纯静态 nginx 示例（本地预览用）
 deploy/nginx-danmu.snippet.conf   反代到 API 的 nginx 片段
+docs/1000-concurrent-loadtest.md   1000 并发压测的方法、脚本和结果
+loadtest/                          压测脚本
 data/                  运行时数据目录（数据库、ip 库不进仓库）
 ```
 
