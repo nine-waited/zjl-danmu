@@ -232,6 +232,20 @@
         </button>
     </div>
 
+    <!-- 进场选城：城市榜按自选统计，IP 仅作建议高亮 -->
+    <div id="cityPickModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-md opacity-0 pointer-events-none transition-opacity duration-300">
+        <div class="relative w-full max-w-md mx-4 bg-slate-800/95 border border-slate-700/80 rounded-3xl p-6 md:p-8 shadow-2xl text-white transform scale-95 transition-transform duration-300">
+            <h2 class="text-xl font-bold mb-2 flex items-center gap-2 text-pink-300">
+                <i class="fa-solid fa-location-dot"></i>
+                <span>选择你所在的城市</span>
+            </h2>
+            <p id="cityPickHint" class="text-sm text-slate-300 mb-5 leading-relaxed">
+                用于大屏城市访问统计。运营商归属地可能不准，请按你实际所在城市选择。
+            </p>
+            <div id="cityPickGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+        </div>
+    </div>
+
     <!-- 弹窗1：个人发射弹幕Modal -->
     <div id="sendModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md opacity-0 pointer-events-none transition-opacity duration-300">
         <div class="relative w-full max-w-lg mx-4 bg-slate-800/95 border border-slate-700/80 rounded-3xl p-6 md:p-8 shadow-2xl text-white transform scale-95 transition-transform duration-300 max-h-[90vh] overflow-y-auto no-scrollbar">
@@ -500,6 +514,16 @@
                 }
                 return id;
             }
+            const CITY_KEY = 'danmu_city';
+            const CITY_NAMES = ['上海', '东莞', '武汉', '成都', '杭州', '北京', '西安', '南京'];
+            function getSavedCity() {
+                const city = (localStorage.getItem(CITY_KEY) || '').trim();
+                return CITY_NAMES.includes(city) ? city : '';
+            }
+            function saveCity(city) {
+                if (!CITY_NAMES.includes(city)) return;
+                try { localStorage.setItem(CITY_KEY, city); } catch (_) {}
+            }
             const clientId = getClientId();
             const myIds = new Set();
             try {
@@ -569,9 +593,23 @@
                     renderCityStats(msg.items || [], msg.version, false, msg.day);
                     return;
                 }
+                if (msg.type === 'checkin_ack') {
+                    if (msg.city) saveCity(msg.city);
+                    if (Array.isArray(msg.items)) renderCityStats(msg.items, msg.version, false, msg.day);
+                    if (msg.need_city) openCityPickModal(msg.suggested_city || '');
+                    else closeCityPickModal();
+                    return;
+                }
                 if (msg.type === 'visits_cleared') {
                     renderCityStats(msg.items || [], msg.version, true, msg.day);
-                    if (isAdmin) alert('已清空访问统计，城市榜已重置为 0');
+                    if (isAdmin) {
+                        alert('已清空访问统计，城市榜已重置为 0');
+                    } else {
+                        const city = getSavedCity();
+                        const payload = { type: 'identify', client_id: clientId, checkin: true };
+                        if (city) payload.city = city;
+                        sendWs(payload);
+                    }
                     return;
                 }
                 if (msg.type === 'speed') {
@@ -650,7 +688,10 @@
                     return;
                 }
                 ws.onopen = () => {
-                    sendWs({ type: 'identify', client_id: clientId, checkin: !isAdmin });
+                    const payload = { type: 'identify', client_id: clientId, checkin: !isAdmin };
+                    const city = getSavedCity();
+                    if (city) payload.city = city;
+                    sendWs(payload);
                     if (isAdmin) sendAdmin({ type: 'list' });
                 };
                 ws.onmessage = (ev) => {
@@ -699,9 +740,45 @@
             const clearVisitsBtn = document.getElementById('clearVisitsBtn');
             const speedControl = document.getElementById('speedControl');
             const speedSlider = document.getElementById('speedSlider');
-            const CITY_NAMES = ['上海', '东莞', '武汉', '成都', '杭州', '北京', '西安', '南京'];
+            const cityPickModal = document.getElementById('cityPickModal');
+            const cityPickGrid = document.getElementById('cityPickGrid');
+            const cityPickHint = document.getElementById('cityPickHint');
             let cityStatsVersion = -1;
             let cityStatsDay = '';
+            let cityPickOpen = false;
+            function openCityPickModal(suggested) {
+                if (isAdmin || !cityPickModal || cityPickOpen) return;
+                cityPickOpen = true;
+                const suggest = CITY_NAMES.includes(suggested) ? suggested : '';
+                if (cityPickHint) {
+                    cityPickHint.textContent = suggest
+                        ? `网络归属地像是「${suggest}」，若与你实际所在地不符请改选。`
+                        : '用于大屏城市访问统计。运营商归属地可能不准，请按你实际所在城市选择。';
+                }
+                cityPickGrid.innerHTML = CITY_NAMES.map((city) => {
+                    const on = city === suggest;
+                    return `<button type="button" data-city="${city}" class="city-pick-btn px-3 py-3 rounded-2xl text-sm font-semibold border transition active:scale-95 ${on ? 'bg-pink-500/30 border-pink-300 text-white ring-2 ring-pink-400' : 'bg-white/5 border-white/15 text-slate-100 hover:bg-white/10'}">${city}${on ? '<div class="text-[10px] font-normal text-pink-200 mt-1">IP 建议</div>' : ''}</button>`;
+                }).join('');
+                openModal(cityPickModal);
+            }
+            function closeCityPickModal() {
+                if (!cityPickModal || !cityPickOpen) return;
+                cityPickOpen = false;
+                closeModal(cityPickModal);
+            }
+            if (cityPickGrid) {
+                cityPickGrid.addEventListener('click', (ev) => {
+                    const btn = ev.target.closest('[data-city]');
+                    if (!btn) return;
+                    const city = btn.getAttribute('data-city');
+                    if (!CITY_NAMES.includes(city)) return;
+                    saveCity(city);
+                    closeCityPickModal();
+                    if (!sendWs({ type: 'identify', client_id: clientId, checkin: true, city })) {
+                        alert('未连上共享服务，城市已保存在本机，连上后会自动上报');
+                    }
+                });
+            }
             function renderCityStats(items, version, force, day) {
                 const grid = document.getElementById('cityGrid');
                 if (!grid) return;

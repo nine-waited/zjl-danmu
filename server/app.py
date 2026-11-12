@@ -350,6 +350,16 @@ def stats_city(region: str | None) -> str | None:
     return None
 
 
+def clamp_city(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text if text in CITY_NAMES else None
+
+
+def suggest_city(ip: str | None) -> str | None:
+    load_geo()
+    return stats_city(lookup_region(ip))
+
+
 def purge_old_visits(today: str) -> None:
     con = db()
     try:
@@ -414,13 +424,22 @@ def city_stats() -> list[dict[str, Any]]:
     return [{"city": city, "count": counts[city]} for city in CITY_NAMES]
 
 
-def record_visit(client_id: str | None, ip: str | None) -> bool:
-    """同一个浏览器当天只计一次。城市仍取这次连接的公网 IP。命中 8 个城市时返回 True。"""
+def record_visit(
+    client_id: str | None,
+    ip: str | None,
+    city: str | None = None,
+) -> tuple[bool, str | None, str | None, bool]:
+    """按浏览器去重。城市以用户自选为准（白名单），IP 只提供 suggested。
+
+    返回 (是否新计入榜, 已确认城市, IP 建议城市, 是否还需要用户选城)。
+    """
     client_id = clamp_client_id(client_id)
+    suggested = suggest_city(ip)
     if not client_id:
-        return False
+        return False, None, suggested, False
     day = china_today()
     ip = str(ip or "").strip()[:64]
+    chosen = clamp_city(city)
     con = db()
     try:
         con.execute("BEGIN IMMEDIATE")
@@ -429,46 +448,53 @@ def record_visit(client_id: str | None, ip: str | None) -> bool:
             (client_id, day),
         ).fetchone()
         if existing:
-            if existing["city"]:
+            current = clamp_city(existing["city"])
+            if current:
                 con.rollback()
-                return False
-            load_geo()
-            city = stats_city(lookup_region(ip))
-            if not city:
-                con.rollback()
-                return False
+                return False, current, suggested, False
+            if not chosen:
+                con.execute(
+                    "UPDATE browser_visit SET ip = COALESCE(?, ip) WHERE client_id = ? AND day = ?",
+                    (ip or None, client_id, day),
+                )
+                con.commit()
+                return False, None, suggested, True
             con.execute(
                 "UPDATE browser_visit SET city = ?, ip = ? WHERE client_id = ? AND day = ? AND (city IS NULL OR city = '')",
-                (city, ip or None, client_id, day),
+                (chosen, ip or None, client_id, day),
             )
             con.commit()
-            return True
-        load_geo()
-        city = stats_city(lookup_region(ip))
+            return True, chosen, suggested, False
         con.execute(
             "INSERT INTO browser_visit(client_id, day, city, ip) VALUES (?,?,?,?)",
-            (client_id, day, city, ip or None),
+            (client_id, day, chosen, ip or None),
         )
         con.commit()
-        return bool(city)
+        if chosen:
+            return True, chosen, suggested, False
+        return False, None, suggested, True
     except Exception:
         try:
             con.rollback()
         except Exception:
             pass
-        return False
+        return False, None, suggested, True
     finally:
         con.close()
 
 
-def note_visit(client_id: str | None, ip: str | None) -> tuple[bool, list[dict[str, Any]], int]:
+def note_visit(
+    client_id: str | None,
+    ip: str | None,
+    city: str | None = None,
+) -> tuple[bool, list[dict[str, Any]], int, str | None, str | None, bool]:
     """调用方必须已持有 lock。插入和读快照在同一临界区内完成。"""
     global stats_version
     rolled = ensure_stats_day()
-    counted = record_visit(client_id, ip)
+    counted, assigned, suggested, need_city = record_visit(client_id, ip, city)
     if counted:
         stats_version += 1
-    return counted or rolled, city_stats(), stats_version
+    return counted or rolled, city_stats(), stats_version, assigned, suggested, need_city
 
 
 def city_stats_message(items: list[dict[str, Any]] | None = None, version: int | None = None) -> dict[str, Any]:
@@ -490,16 +516,8 @@ def lookup_region(ip: str | None) -> str | None:
 
 
 def backfill_visit_cities(con: sqlite3.Connection) -> None:
-    pending = con.execute(
-        "SELECT client_id, day, ip FROM browser_visit WHERE (city IS NULL OR city = '') AND ip IS NOT NULL AND ip != ''"
-    ).fetchall()
-    for row in pending:
-        city = stats_city(lookup_region(row["ip"]))
-        if city:
-            con.execute(
-                "UPDATE browser_visit SET city = ? WHERE client_id = ? AND day = ?",
-                (city, row["client_id"], row["day"]),
-            )
+    # 城市改为用户自选后，不再用 IP 回填，避免号段归属把东莞访客观成广州。
+    return
 
 
 def backfill_regions(con: sqlite3.Connection) -> None:
@@ -1012,9 +1030,27 @@ async def ws_endpoint(ws: WebSocket):
                 cid = remember_client(ws, msg.get("client_id"))
                 if msg.get("checkin") is not False and cid:
                     async with lock:
-                        changed, _, _ = note_visit(cid, ws_client_ip(ws))
-                        if changed:
-                            city_dirty = True
+                        changed, items, version, assigned, suggested, need_city = note_visit(
+                            cid, ws_client_ip(ws), msg.get("city")
+                        )
+                        day = stats_day or china_today()
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "checkin_ack",
+                                "city": assigned,
+                                "suggested_city": suggested,
+                                "need_city": need_city,
+                                "day": day,
+                                "version": version,
+                                "items": items if changed else None,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    # 选城计入后立刻推榜，避免再等 3 秒合并窗口
+                    if changed:
+                        await broadcast(city_stats_message(items, version))
                 continue
             if mtype == "send":
                 raw_danmu = msg.get("danmu") if isinstance(msg.get("danmu"), dict) else msg
