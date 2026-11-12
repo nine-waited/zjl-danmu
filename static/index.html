@@ -524,6 +524,13 @@
                 if (!CITY_NAMES.includes(city)) return;
                 try { localStorage.setItem(CITY_KEY, city); } catch (_) {}
             }
+            function recheckinCached() {
+                if (/^(\/danmu)?\/admin\/?$/.test(location.pathname)) return;
+                const payload = { type: 'identify', client_id: clientId, checkin: true };
+                const city = getSavedCity();
+                if (city) payload.city = city;
+                sendWs(payload);
+            }
             const clientId = getClientId();
             const myIds = new Set();
             try {
@@ -596,20 +603,13 @@
                 if (msg.type === 'checkin_ack') {
                     if (msg.city) saveCity(msg.city);
                     if (Array.isArray(msg.items)) renderCityStats(msg.items, msg.version, false, msg.day);
-                    if (msg.need_city) openCityPickModal(msg.suggested_city || '');
+                    if (msg.need_city && !getSavedCity()) openCityPickModal(msg.suggested_city || '');
                     else closeCityPickModal();
                     return;
                 }
                 if (msg.type === 'visits_cleared') {
                     renderCityStats(msg.items || [], msg.version, true, msg.day);
-                    if (isAdmin) {
-                        alert('已清空访问统计，城市榜已重置为 0');
-                    } else {
-                        const city = getSavedCity();
-                        const payload = { type: 'identify', client_id: clientId, checkin: true };
-                        if (city) payload.city = city;
-                        sendWs(payload);
-                    }
+                    if (isAdmin) alert('已清空今日访问人数。已选城市仍保留，下次进入会按原城市重新计数。');
                     return;
                 }
                 if (msg.type === 'speed') {
@@ -783,7 +783,8 @@
                 const grid = document.getElementById('cityGrid');
                 if (!grid) return;
                 if (day && cityStatsDay && day < cityStatsDay) return;
-                if (day && cityStatsDay && day > cityStatsDay) force = true;
+                const dayRolled = !!(day && cityStatsDay && day > cityStatsDay);
+                if (dayRolled) force = true;
                 if (version !== undefined && version !== null && version !== '') {
                     const next = Number(version);
                     if (Number.isFinite(next)) {
@@ -804,6 +805,7 @@
                     </div>
                 `).join('');
                 fitDanmuTop();
+                if (dayRolled) recheckinCached();
             }
             function fitDanmuTop() {
                 const chrome = document.getElementById('topChrome');

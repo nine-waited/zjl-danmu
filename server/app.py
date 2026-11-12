@@ -146,6 +146,24 @@ def init_db() -> None:
         )
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS client_city (
+            client_id TEXT PRIMARY KEY,
+            city TEXT NOT NULL
+        )
+        """
+    )
+    # 已选城市按浏览器永久保留，不随日切或管理端清空一起删。
+    for row in con.execute(
+        "SELECT client_id, city FROM browser_visit WHERE city IS NOT NULL AND city != '' ORDER BY day ASC"
+    ):
+        city = str(row["city"] or "").strip()
+        if city in CITY_NAMES:
+            con.execute(
+                "INSERT OR REPLACE INTO client_city(client_id, city) VALUES (?, ?)",
+                (row["client_id"], city),
+            )
     load_geo()
     backfill_regions(con)
     backfill_visit_cities(con)
@@ -371,7 +389,7 @@ def purge_old_visits(today: str) -> None:
 
 
 def wipe_visit_rows() -> None:
-    """删光访问表。不改 stats_day，零点日切仍由 ensure_stats_day 负责。"""
+    """只清当天人数。client_city（自选城市）保留，零点日切也不碰它。"""
     con = db()
     try:
         con.execute("DELETE FROM ip_visit")
@@ -394,12 +412,12 @@ def ensure_stats_day() -> bool:
 
 
 def clear_visits() -> tuple[list[dict[str, Any]], int, str]:
-    """管理面清空访问。调用方必须已持有 lock。
+    """管理面清空当天人数。调用方必须已持有 lock。
 
     与零点重置的分工：
     - 先 ensure_stats_day：若已跨日，先完成日切，再清「今天」；
-    - 只删访问行、推进 stats_version，不改写 stats_day；
-    - 零点到来时 ensure_stats_day 仍按日界切换，不会被这次清空打乱。
+    - 只删 browser_visit / ip_visit，不删 client_city，也不改 stats_day；
+    - 零点只删过期的按日人数，自选城市继续留在 client_city。
     """
     global stats_version, city_dirty
     ensure_stats_day()
@@ -424,12 +442,24 @@ def city_stats() -> list[dict[str, Any]]:
     return [{"city": city, "count": counts[city]} for city in CITY_NAMES]
 
 
+def saved_client_city(con: sqlite3.Connection, client_id: str) -> str | None:
+    row = con.execute("SELECT city FROM client_city WHERE client_id = ?", (client_id,)).fetchone()
+    return clamp_city(row["city"]) if row else None
+
+
+def remember_client_city(con: sqlite3.Connection, client_id: str, city: str) -> None:
+    con.execute(
+        "INSERT OR REPLACE INTO client_city(client_id, city) VALUES (?, ?)",
+        (client_id, city),
+    )
+
+
 def record_visit(
     client_id: str | None,
     ip: str | None,
     city: str | None = None,
 ) -> tuple[bool, str | None, str | None, bool]:
-    """按浏览器去重。城市以用户自选为准（白名单），IP 只提供 suggested。
+    """按浏览器 + 当天去重。城市只来自用户自选缓存，IP 只做建议，不写入统计。
 
     返回 (是否新计入榜, 已确认城市, IP 建议城市, 是否还需要用户选城)。
     """
@@ -443,36 +473,41 @@ def record_visit(
     con = db()
     try:
         con.execute("BEGIN IMMEDIATE")
+        if chosen:
+            remember_client_city(con, client_id, chosen)
+        effective = chosen or saved_client_city(con, client_id)
         existing = con.execute(
             "SELECT city FROM browser_visit WHERE client_id = ? AND day = ?",
             (client_id, day),
         ).fetchone()
-        if existing:
-            current = clamp_city(existing["city"])
-            if current:
-                con.rollback()
-                return False, current, suggested, False
-            if not chosen:
+        if not effective:
+            if not existing:
+                con.execute(
+                    "INSERT INTO browser_visit(client_id, day, city, ip) VALUES (?,?,NULL,?)",
+                    (client_id, day, ip or None),
+                )
+            else:
                 con.execute(
                     "UPDATE browser_visit SET ip = COALESCE(?, ip) WHERE client_id = ? AND day = ?",
                     (ip or None, client_id, day),
                 )
-                con.commit()
-                return False, None, suggested, True
-            con.execute(
-                "UPDATE browser_visit SET city = ?, ip = ? WHERE client_id = ? AND day = ? AND (city IS NULL OR city = '')",
-                (chosen, ip or None, client_id, day),
-            )
             con.commit()
-            return True, chosen, suggested, False
-        con.execute(
-            "INSERT INTO browser_visit(client_id, day, city, ip) VALUES (?,?,?,?)",
-            (client_id, day, chosen, ip or None),
-        )
+            return False, None, suggested, True
+        if existing and clamp_city(existing["city"]) == effective:
+            con.commit()
+            return False, effective, suggested, False
+        if existing:
+            con.execute(
+                "UPDATE browser_visit SET city = ?, ip = ? WHERE client_id = ? AND day = ?",
+                (effective, ip or None, client_id, day),
+            )
+        else:
+            con.execute(
+                "INSERT INTO browser_visit(client_id, day, city, ip) VALUES (?,?,?,?)",
+                (client_id, day, effective, ip or None),
+            )
         con.commit()
-        if chosen:
-            return True, chosen, suggested, False
-        return False, None, suggested, True
+        return True, effective, suggested, False
     except Exception:
         try:
             con.rollback()
