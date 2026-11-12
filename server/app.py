@@ -360,6 +360,17 @@ def purge_old_visits(today: str) -> None:
         con.close()
 
 
+def wipe_visit_rows() -> None:
+    """删光访问表。不改 stats_day，零点日切仍由 ensure_stats_day 负责。"""
+    con = db()
+    try:
+        con.execute("DELETE FROM ip_visit")
+        con.execute("DELETE FROM browser_visit")
+        con.commit()
+    finally:
+        con.close()
+
+
 def ensure_stats_day() -> bool:
     """调用方必须已持有 lock。跨过中国零点时删掉昨日记录并推进代数。"""
     global stats_day, stats_version
@@ -370,6 +381,22 @@ def ensure_stats_day() -> bool:
     stats_day = today
     stats_version += 1
     return True
+
+
+def clear_visits() -> tuple[list[dict[str, Any]], int, str]:
+    """管理面清空访问。调用方必须已持有 lock。
+
+    与零点重置的分工：
+    - 先 ensure_stats_day：若已跨日，先完成日切，再清「今天」；
+    - 只删访问行、推进 stats_version，不改写 stats_day；
+    - 零点到来时 ensure_stats_day 仍按日界切换，不会被这次清空打乱。
+    """
+    global stats_version, city_dirty
+    ensure_stats_day()
+    wipe_visit_rows()
+    stats_version += 1
+    city_dirty = False
+    return city_stats(), stats_version, stats_day or china_today()
 
 
 def city_stats() -> list[dict[str, Any]]:
@@ -925,6 +952,15 @@ async def clear_danmu(request: Request):
     return {"ok": True, "removed": removed, "count": 0}
 
 
+@app.post("/api/visits/clear")
+async def clear_visits_api(request: Request):
+    require_admin(request.headers.get("x-admin-token"))
+    async with lock:
+        items, version, day = clear_visits()
+    await broadcast(city_stats_message(items, version))
+    return {"ok": True, "items": items, "version": version, "day": day}
+
+
 @app.post("/api/loop")
 async def set_loop(payload: dict[str, Any], request: Request):
     require_admin(request.headers.get("x-admin-token"))
@@ -1071,6 +1107,20 @@ async def ws_endpoint(ws: WebSocket):
                     await reject(ws)
                     continue
                 await broadcast({"type": "clear_screen"})
+            elif mtype == "clear_visits":
+                if not admin_authorized(msg.get("token")):
+                    await reject(ws)
+                    continue
+                mark_admin(ws)
+                async with lock:
+                    items, version, day = clear_visits()
+                await broadcast(city_stats_message(items, version))
+                await ws.send_text(
+                    json.dumps(
+                        {"type": "visits_cleared", "items": items, "version": version, "day": day},
+                        ensure_ascii=False,
+                    )
+                )
             elif mtype == "speed":
                 if not admin_authorized(msg.get("token")):
                     await reject(ws)

@@ -200,6 +200,9 @@
                 <span class="text-xs text-slate-300">快</span>
                 <span id="speedValue" class="w-7 text-right tabular-nums text-pink-200">50</span>
             </label>
+            <button id="clearVisitsBtn" class="hidden px-3 py-2 bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 active:scale-95 transition rounded-full text-sm font-medium border border-amber-500/30" title="清空今日访问统计">
+                <i class="fa-solid fa-chart-column mr-1"></i><span class="hidden sm:inline">清空访问</span>
+            </button>
             <button id="clearBtn" class="px-3 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-200 active:scale-95 transition rounded-full text-sm font-medium border border-red-500/30" title="清屏">
                 <i class="fa-solid fa-trash-can"></i>
             </button>
@@ -566,6 +569,11 @@
                     renderCityStats(msg.items || [], msg.version, false, msg.day);
                     return;
                 }
+                if (msg.type === 'visits_cleared') {
+                    renderCityStats(msg.items || [], msg.version, true, msg.day);
+                    if (isAdmin) alert('已清空访问统计，城市榜已重置为 0');
+                    return;
+                }
                 if (msg.type === 'speed') {
                     applyDanmuSpeed(msg.value);
                     return;
@@ -688,6 +696,7 @@
             const autoPlayBtn = document.getElementById('autoPlayBtn');
             const autoPlayText = document.getElementById('autoPlayText');
             const clearBtn = document.getElementById('clearBtn');
+            const clearVisitsBtn = document.getElementById('clearVisitsBtn');
             const speedControl = document.getElementById('speedControl');
             const speedSlider = document.getElementById('speedSlider');
             const CITY_NAMES = ['上海', '东莞', '武汉', '成都', '杭州', '北京', '西安', '南京'];
@@ -743,6 +752,8 @@
                 bgBtn.classList.remove('hidden');
                 presetBtn.classList.remove('hidden');
                 speedControl.classList.remove('hidden');
+                clearVisitsBtn.classList.remove('hidden');
+                clearVisitsBtn.classList.add('inline-flex', 'items-center');
                 bgBtn.classList.add('flex');
                 presetBtn.classList.add('flex');
                 speedControl.classList.add('flex');
@@ -757,6 +768,7 @@
                 bgBtn.remove();
                 presetBtn.remove();
                 speedControl.remove();
+                clearVisitsBtn.remove();
             }
 
             // --- 弹窗管理函数 ---
@@ -1085,6 +1097,12 @@
             if (isAdmin) {
                 clearBtn.title = '全局清屏（所有观众）';
                 clearBtn.setAttribute('aria-label', '全局清屏');
+                clearVisitsBtn.addEventListener('click', () => {
+                    if (!confirm('确定清空今日访问统计？城市榜会立刻归零；中国零点的自动日切不受影响。')) return;
+                    if (!sendAdmin({ type: 'clear_visits' })) {
+                        alert('未连上共享服务，请稍后重试');
+                    }
+                });
             } else {
                 clearBtn.title = '清屏（仅本机）';
                 clearBtn.setAttribute('aria-label', '清屏仅本机');
