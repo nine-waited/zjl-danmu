@@ -169,18 +169,18 @@
     <div class="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60 pointer-events-none"></div>
 
     <!-- 顶部控制栏：logo、地域统计、删除按钮 -->
-    <header id="topChrome" class="relative z-30 flex items-center gap-3 px-4 py-2 bg-black/30 backdrop-blur-md border-b border-white/10">
-        <div class="flex items-center gap-2 shrink-0">
-            <div class="w-9 h-9 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 flex items-center justify-center shadow-lg">
-                <i class="fa-solid font-bold fa-paper-plane text-base text-white"></i>
+    <header id="topChrome" class="relative z-30 flex items-center gap-2 px-3 py-1 bg-black/30 backdrop-blur-md border-b border-white/10">
+        <div class="flex items-center gap-1.5 shrink-0">
+            <div class="w-7 h-7 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 flex items-center justify-center shadow-lg">
+                <i class="fa-solid font-bold fa-paper-plane text-xs text-white"></i>
             </div>
-            <h1 class="hidden sm:block text-base font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-pink-300 via-purple-300 to-indigo-300">
+            <h1 class="hidden sm:block text-sm font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-pink-300 via-purple-300 to-indigo-300">
                 互动弹幕大屏
             </h1>
         </div>
 
-        <div id="cityBoard" class="flex-1 min-w-0">
-            <div id="cityGrid" class="grid grid-flow-col grid-rows-2 grid-cols-4 gap-1"></div>
+        <div id="cityBoard" class="shrink min-w-0">
+            <div id="cityGrid" class="grid w-max max-w-full grid-flow-col grid-rows-2 grid-cols-4 gap-0.5"></div>
         </div>
 
         <!-- 顶部工具按钮群 -->
@@ -203,8 +203,12 @@
             <button id="clearVisitsBtn" class="hidden px-3 py-2 bg-amber-500/20 hover:bg-amber-500/40 text-amber-100 active:scale-95 transition rounded-full text-sm font-medium border border-amber-500/30" title="清空今日访问统计">
                 <i class="fa-solid fa-chart-column mr-1"></i><span class="hidden sm:inline">清空访问</span>
             </button>
-            <button id="clearBtn" class="px-3 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-200 active:scale-95 transition rounded-full text-sm font-medium border border-red-500/30" title="清屏">
-                <i class="fa-solid fa-trash-can"></i>
+            <button id="myCityBtn" type="button" class="inline-flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 text-pink-100 active:scale-95 transition rounded-full text-[11px] font-medium border border-white/20 leading-none" title="选择所在城市" aria-label="更改所在城市">
+                <i class="fa-solid fa-location-dot text-[10px] text-pink-300"></i>
+                <span id="myCityLabel">选地域</span>
+            </button>
+            <button id="clearBtn" class="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/40 text-red-200 active:scale-95 transition rounded-full text-sm font-medium border border-red-500/30 leading-none" title="清屏">
+                <i class="fa-solid fa-trash-can text-xs"></i>
             </button>
         </div>
     </header>
@@ -523,7 +527,19 @@
             function saveCity(city) {
                 if (!CITY_NAMES.includes(city)) return;
                 try { localStorage.setItem(CITY_KEY, city); } catch (_) {}
+                refreshMyCityLabel();
             }
+            let lastSuggestedCity = '';
+            let cityPickManual = false;
+            function refreshMyCityLabel() {
+                const label = document.getElementById('myCityLabel');
+                const btn = document.getElementById('myCityBtn');
+                if (!label && !btn) return;
+                const city = getSavedCity();
+                if (label) label.textContent = city || '选地域';
+                if (btn) btn.title = city ? `当前地域：${city}，点击更改` : '选择所在城市';
+            }
+            refreshMyCityLabel();
             function recheckinCached() {
                 if (/^(\/danmu)?\/admin\/?$/.test(location.pathname)) return;
                 const payload = { type: 'identify', client_id: clientId, checkin: true };
@@ -601,10 +617,12 @@
                     return;
                 }
                 if (msg.type === 'checkin_ack') {
+                    if (CITY_NAMES.includes(msg.suggested_city)) lastSuggestedCity = msg.suggested_city;
                     if (msg.city) saveCity(msg.city);
+                    else refreshMyCityLabel();
                     if (Array.isArray(msg.items)) renderCityStats(msg.items, msg.version, false, msg.day);
                     if (msg.need_city && !getSavedCity()) openCityPickModal(msg.suggested_city || '');
-                    else closeCityPickModal();
+                    else if (!cityPickManual) closeCityPickModal();
                     return;
                 }
                 if (msg.type === 'visits_cleared') {
@@ -750,20 +768,33 @@
                 if (isAdmin || !cityPickModal || cityPickOpen) return;
                 cityPickOpen = true;
                 const suggest = CITY_NAMES.includes(suggested) ? suggested : '';
+                const current = getSavedCity();
                 if (cityPickHint) {
-                    cityPickHint.textContent = suggest
-                        ? `网络归属地像是「${suggest}」，若与你实际所在地不符请改选。`
-                        : '用于大屏城市访问统计。运营商归属地可能不准，请按你实际所在城市选择。';
+                    if (current && suggest && suggest !== current) {
+                        cityPickHint.textContent = `当前是「${current}」。网络归属地像是「${suggest}」，可改选。`;
+                    } else if (current) {
+                        cityPickHint.textContent = `当前是「${current}」，点选可更改。`;
+                    } else if (suggest) {
+                        cityPickHint.textContent = `网络归属地像是「${suggest}」，若与你实际所在地不符请改选。`;
+                    } else {
+                        cityPickHint.textContent = '用于大屏城市访问统计。运营商归属地可能不准，请按你实际所在城市选择。';
+                    }
                 }
                 cityPickGrid.innerHTML = CITY_NAMES.map((city) => {
-                    const on = city === suggest;
-                    return `<button type="button" data-city="${city}" class="city-pick-btn px-3 py-3 rounded-2xl text-sm font-semibold border transition active:scale-95 ${on ? 'bg-pink-500/30 border-pink-300 text-white ring-2 ring-pink-400' : 'bg-white/5 border-white/15 text-slate-100 hover:bg-white/10'}">${city}${on ? '<div class="text-[10px] font-normal text-pink-200 mt-1">IP 建议</div>' : ''}</button>`;
+                    const isCurrent = city === current;
+                    const isSuggest = city === suggest && !isCurrent;
+                    const on = isCurrent || (!current && city === suggest);
+                    const badge = isCurrent
+                        ? '<div class="text-[10px] font-normal text-pink-200 mt-1">当前</div>'
+                        : (isSuggest ? '<div class="text-[10px] font-normal text-pink-200 mt-1">IP 建议</div>' : '');
+                    return `<button type="button" data-city="${city}" class="city-pick-btn px-3 py-3 rounded-2xl text-sm font-semibold border transition active:scale-95 ${on ? 'bg-pink-500/30 border-pink-300 text-white ring-2 ring-pink-400' : 'bg-white/5 border-white/15 text-slate-100 hover:bg-white/10'}">${city}${badge}</button>`;
                 }).join('');
                 openModal(cityPickModal);
             }
             function closeCityPickModal() {
                 if (!cityPickModal || !cityPickOpen) return;
                 cityPickOpen = false;
+                cityPickManual = false;
                 closeModal(cityPickModal);
             }
             if (cityPickGrid) {
@@ -799,9 +830,9 @@
                     if (it && Object.prototype.hasOwnProperty.call(counts, it.city)) counts[it.city] = Number(it.count) || 0;
                 });
                 grid.innerHTML = CITY_NAMES.map((city) => `
-                    <div class="flex items-center justify-between gap-1 min-w-0 px-1.5 py-0.5 rounded-md bg-black/40 border border-white/10">
-                        <span class="text-[11px] leading-none font-semibold text-pink-100 truncate">${city}</span>
-                        <span class="text-xs leading-none font-bold tabular-nums text-white">${counts[city]}</span>
+                    <div class="flex items-center gap-0.5 px-1 py-px rounded bg-black/40 border border-white/10 leading-none">
+                        <span class="text-[10px] font-medium text-pink-100 whitespace-nowrap">${city}</span>
+                        <span class="text-[10px] font-bold tabular-nums text-white">${counts[city]}</span>
                     </div>
                 `).join('');
                 fitDanmuTop();
@@ -828,6 +859,8 @@
             if (isAdmin) {
                 const cityBoard = document.getElementById('cityBoard');
                 if (cityBoard) cityBoard.remove();
+                const myCityBtn = document.getElementById('myCityBtn');
+                if (myCityBtn) myCityBtn.remove();
                 bgBtn.classList.remove('hidden');
                 presetBtn.classList.remove('hidden');
                 speedControl.classList.remove('hidden');
@@ -848,6 +881,14 @@
                 presetBtn.remove();
                 speedControl.remove();
                 clearVisitsBtn.remove();
+                const myCityBtn = document.getElementById('myCityBtn');
+                refreshMyCityLabel();
+                if (myCityBtn) {
+                    myCityBtn.addEventListener('click', () => {
+                        cityPickManual = true;
+                        openCityPickModal(lastSuggestedCity);
+                    });
+                }
             }
 
             // --- 弹窗管理函数 ---
