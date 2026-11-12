@@ -142,6 +142,12 @@
         .animate-mickey {
             animation: pulse-custom 1.8s infinite ease-in-out;
         }
+        .qr-sphere {
+            box-shadow:
+                inset -10px -12px 22px rgba(15, 23, 42, 0.28),
+                inset 8px 10px 18px rgba(255, 255, 255, 0.45),
+                0 14px 36px rgba(0, 0, 0, 0.35);
+        }
 
         /* 隐藏滚动条 */
         .no-scrollbar::-webkit-scrollbar {
@@ -211,10 +217,10 @@
             <!-- 光晕背景 -->
             <div class="absolute -inset-4 rounded-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 opacity-75 blur-lg group-hover:opacity-100 transition duration-500 animate-pulse"></div>
             
-            <!-- 米老鼠手势图标核心容器 -->
-            <div class="relative w-28 h-28 md:w-36 md:h-36 bg-white/90 backdrop-blur-xl rounded-full flex items-center justify-center border-4 border-white shadow-2xl animate-mickey">
-                <img id="sendGloveImg" alt="" class="w-24 h-24 md:w-32 md:h-32 object-contain transition-transform group-hover:rotate-6 pointer-events-none select-none">
-                <script>document.getElementById('sendGloveImg').src = BASE + '/assets/mickey-click-glove-left.png?v=3';</script>
+            <!-- 球形二维码（扫码打开 https://nineee.xyz/danmu/），完全填充圆形 -->
+            <div class="relative w-28 h-28 md:w-40 md:h-40 rounded-full overflow-hidden border-4 border-white animate-mickey qr-sphere bg-white">
+                <img id="sendGloveImg" alt="扫码访问弹幕页 https://nineee.xyz/danmu/" class="absolute inset-0 w-full h-full object-cover pointer-events-none select-none">
+                <script>document.getElementById('sendGloveImg').src = BASE + '/assets/danmu-sphere-qr.png?v=2';</script>
             </div>
             
             <span class="mt-4 px-6 py-2 bg-black/60 backdrop-blur-md border border-white/20 text-white rounded-full text-base md:text-lg font-bold tracking-wider shadow-lg group-hover:bg-pink-600 transition">
