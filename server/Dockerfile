@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" py-ip2region
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" python-multipart py-ip2region pillow
 WORKDIR /app
 COPY app.py /app/app.py
 EXPOSE 8088

@@ -162,9 +162,20 @@
 <body class="relative w-screen h-screen bg-slate-900 text-white overflow-hidden">
 
     <!-- 背景图片涂层 -->
-    <div id="bgLayer" class="absolute inset-0 bg-cover bg-center transition-all duration-700 brightness-75 scale-105" 
-         style="background-image: url('https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=1920&auto=format&fit=crop');">
-    </div>
+    <div id="bgLayer" class="absolute inset-0 bg-cover bg-center brightness-75 scale-105" data-bg="%%DANMU_BG_ATTR%%"></div>
+    <script>
+        (function () {
+            var layer = document.getElementById("bgLayer");
+            if (!layer) return;
+            var url = "";
+            try { url = JSON.parse(layer.getAttribute("data-bg") || '""'); } catch (e) { url = ""; }
+            if (!url) return;
+            var base = location.pathname.indexOf("/danmu") === 0 ? "/danmu" : "";
+            var full = url.charAt(0) === "/" ? base + url : url;
+            layer.dataset.applied = url;
+            layer.style.backgroundImage = "url('" + String(full).replace(/'/g, "") + "')";
+        })();
+    </script>
     <!-- 渐变蒙版，提升文字清晰度 -->
     <div class="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/60 pointer-events-none"></div>
 
@@ -179,8 +190,8 @@
             </h1>
         </div>
 
-        <div id="cityBoard" class="shrink min-w-0">
-            <div id="cityGrid" class="grid w-max max-w-full grid-flow-col grid-rows-2 grid-cols-4 gap-0.5"></div>
+        <div id="cityBoard" class="flex-1 min-w-0">
+            <div id="cityGrid" class="grid w-full grid-flow-col grid-rows-2 grid-cols-4 gap-0.5"></div>
         </div>
 
         <!-- 顶部工具按钮群 -->
@@ -188,6 +199,10 @@
             <button id="bgBtn" class="hidden px-4 py-2 bg-white/10 hover:bg-white/20 active:scale-95 transition backdrop-blur-md rounded-full text-sm font-medium flex items-center space-x-2 border border-white/20">
                 <i class="fa-solid fa-image text-pink-400"></i>
                 <span>更换背景</span>
+            </button>
+            <button id="musicBtn" class="hidden px-4 py-2 bg-white/10 hover:bg-white/20 active:scale-95 transition backdrop-blur-md rounded-full text-sm font-medium flex items-center space-x-2 border border-white/20">
+                <i class="fa-solid fa-music text-emerald-300"></i>
+                <span>背景音乐</span>
             </button>
             <button id="presetBtn" class="hidden px-4 py-2 bg-white/10 hover:bg-white/20 active:scale-95 transition backdrop-blur-md rounded-full text-sm font-medium flex items-center space-x-2 border border-white/20">
                 <i class="fa-solid fa-list-check text-indigo-400"></i>
@@ -212,6 +227,8 @@
             </button>
         </div>
     </header>
+    <audio id="bgm" loop preload="auto" playsinline webkit-playsinline></audio>
+    <button id="bgmHint" type="button" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-full bg-black/70 border border-white/20 text-sm font-medium shadow-lg">点击播放背景音乐</button>
 
     <!-- 弹幕滚屏展示区域 -->
     <main id="danmuContainer" class="absolute inset-0 z-10 pointer-events-none overflow-hidden pt-20 pb-24">
@@ -230,7 +247,7 @@
                 <script>document.getElementById('sendGloveImg').src = BASE + '/assets/danmu-sphere-qr.png?v=3';</script>
             </div>
             
-            <span class="mt-4 px-6 py-2 bg-black/60 backdrop-blur-md border border-white/20 text-white rounded-full text-base md:text-lg font-bold tracking-wider shadow-lg group-hover:bg-pink-600 transition">
+            <span class="mt-4 px-5 py-2 max-w-[18rem] text-center bg-black/60 backdrop-blur-md border border-white/20 text-white rounded-full text-sm md:text-base font-bold tracking-wide shadow-lg group-hover:bg-pink-600 transition">
                 手机welink扫码发射弹幕 <i class="fa-solid fa-hand-pointer ml-1 animate-bounce"></i>
             </span>
         </button>
@@ -417,8 +434,8 @@
                 <div class="bg-option cursor-pointer overflow-hidden rounded-xl border-2 border-transparent hover:border-pink-500 h-20 transition hover:scale-105" data-bg="https://images.unsplash.com/photo-1519750157634-b6d493a0f77c?q=80&w=1920&auto=format&fit=crop">
                     <img src="https://images.unsplash.com/photo-1519750157634-b6d493a0f77c?q=80&w=400" class="w-full h-full object-cover">
                 </div>
-                <div class="bg-option cursor-pointer overflow-hidden rounded-xl border-2 border-transparent hover:border-pink-500 h-20 transition hover:scale-105" data-bg="https://images.unsplash.com/photo-1518173946687-a4c8a383392e?q=80&w=1920&auto=format&fit=crop">
-                    <img src="https://images.unsplash.com/photo-1518173946687-a4c8a383392e?q=80&w=400" class="w-full h-full object-cover">
+                <div class="bg-option cursor-pointer overflow-hidden rounded-xl border-2 border-transparent hover:border-pink-500 h-20 transition hover:scale-105" data-bg="https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?q=80&w=1920&auto=format&fit=crop">
+                    <img src="https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?q=80&w=400" class="w-full h-full object-cover">
                 </div>
             </div>
 
@@ -437,6 +454,28 @@
                     </label>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="musicModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md opacity-0 pointer-events-none transition-opacity duration-300">
+        <div class="relative w-full max-w-md mx-4 bg-slate-800/95 border border-slate-700/80 rounded-3xl p-6 shadow-2xl text-white transform scale-95 transition-transform duration-300">
+            <button id="closeMusicModal" type="button" class="absolute top-5 right-5 text-slate-400 hover:text-white w-9 h-9 rounded-full bg-slate-700/50 flex items-center justify-center transition">
+                <i class="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <h2 class="text-2xl font-bold mb-2 flex items-center gap-2 text-emerald-300">
+                <i class="fa-solid fa-music"></i>
+                <span>背景音乐</span>
+            </h2>
+            <p id="musicStatus" class="text-sm text-slate-300 mb-4">当前没有背景音乐。上传后大屏会循环播放。</p>
+            <div class="flex flex-wrap gap-2">
+                <label class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-semibold cursor-pointer">
+                    上传音频
+                    <input id="musicFileInput" type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.wav,.webm" class="hidden">
+                </label>
+                <button id="musicToggleBtn" type="button" class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-semibold border border-white/20">播放</button>
+                <button id="musicClearBtn" type="button" class="px-4 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded-xl text-sm font-semibold border border-red-500/30">移除</button>
+            </div>
+            <p class="mt-3 text-xs text-slate-400">支持 mp3、m4a、aac、ogg、wav、webm，最大 20MB。观众页若被浏览器拦住自动播放，会提示点击一次。</p>
         </div>
     </div>
 
@@ -540,6 +579,112 @@
                 if (btn) btn.title = city ? `当前地域：${city}，点击更改` : '选择所在城市';
             }
             refreshMyCityLabel();
+            function applyBackground(url) {
+                const layer = document.getElementById('bgLayer');
+                if (!layer || !url || layer.dataset.applied === url) return;
+                layer.dataset.applied = url;
+                const full = url.charAt(0) === '/' ? (BASE + url) : url;
+                layer.style.backgroundImage = "url('" + full.replace(/'/g, '') + "')";
+            }
+            let musicState = { url: '', name: '', playing: false };
+            let bgmLocalPaused = false;
+            function isMobileAudience() {
+                const ua = navigator.userAgent || '';
+                if (/Android|iPhone|iPad|iPod|Mobile|WeLink|welink|MicroMessenger|HarmonyOS/i.test(ua)) return true;
+                try {
+                    if (window.matchMedia('(pointer: coarse)').matches) return true;
+                } catch (_) {}
+                return navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 900;
+            }
+            function refreshBgmButton() {
+                const hint = document.getElementById('bgmHint');
+                const audio = document.getElementById('bgm');
+                if (!hint || !audio) return;
+                if (!musicState.url) {
+                    hint.classList.add('hidden');
+                    hint.style.display = 'none';
+                    return;
+                }
+                hint.classList.remove('hidden');
+                hint.style.display = '';
+                const playing = !audio.paused && !audio.ended;
+                hint.textContent = playing ? '点击暂停背景音乐' : '点击播放背景音乐';
+            }
+            function applyMusic(state) {
+                const audio = document.getElementById('bgm');
+                const status = document.getElementById('musicStatus');
+                const toggle = document.getElementById('musicToggleBtn');
+                if (!audio) return;
+                const nextUrl = (state && state.url) || '';
+                const full = nextUrl ? (nextUrl.charAt(0) === '/' ? BASE + nextUrl : nextUrl) : '';
+                if (audio.dataset.src !== full) {
+                    audio.dataset.src = full;
+                    if (full) audio.src = full;
+                    else audio.removeAttribute('src');
+                    bgmLocalPaused = false;
+                }
+                musicState = {
+                    url: nextUrl,
+                    name: (state && state.name) || '',
+                    playing: !!(state && state.playing && nextUrl),
+                };
+                if (status) {
+                    status.textContent = musicState.url
+                        ? ('正在使用：' + (musicState.name || '背景音乐') + (musicState.playing ? '（播放中）' : '（已暂停）'))
+                        : '当前没有背景音乐。上传后大屏会循环播放。';
+                }
+                if (toggle) toggle.textContent = musicState.playing ? '暂停' : '播放';
+                if (!musicState.url) {
+                    audio.pause();
+                    refreshBgmButton();
+                    return;
+                }
+                refreshBgmButton();
+                if (!musicState.playing || bgmLocalPaused) {
+                    audio.pause();
+                    refreshBgmButton();
+                    return;
+                }
+                if (isMobileAudience()) {
+                    refreshBgmButton();
+                    return;
+                }
+                const pending = audio.play();
+                if (pending && pending.then) pending.then(refreshBgmButton).catch(refreshBgmButton);
+                else refreshBgmButton();
+            }
+            const bgmAudio = document.getElementById('bgm');
+            if (bgmAudio) {
+                bgmAudio.addEventListener('playing', refreshBgmButton);
+                bgmAudio.addEventListener('pause', refreshBgmButton);
+            }
+            const bgmHint = document.getElementById('bgmHint');
+            if (bgmHint) {
+                bgmHint.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const audio = document.getElementById('bgm');
+                    if (!audio || !musicState.url) return;
+                    if (!audio.paused && !audio.ended) {
+                        bgmLocalPaused = true;
+                        audio.pause();
+                        refreshBgmButton();
+                        return;
+                    }
+                    bgmLocalPaused = false;
+                    const pending = audio.play();
+                    if (pending && pending.then) pending.then(refreshBgmButton).catch(refreshBgmButton);
+                    else refreshBgmButton();
+                });
+            }
+            fetch(BASE + '/api/music', { cache: 'no-store' })
+                .then((res) => res.json())
+                .then((data) => { if (data) applyMusic(data); })
+                .catch(() => {});
+            fetch(BASE + '/api/background', { cache: 'no-store' })
+                .then((res) => res.json())
+                .then((data) => { if (data && data.url) applyBackground(data.url); })
+                .catch(() => {});
             function recheckinCached() {
                 if (/^(\/danmu)?\/admin\/?$/.test(location.pathname)) return;
                 const payload = { type: 'identify', client_id: clientId, checkin: true };
@@ -610,6 +755,16 @@
                     if (msg.speed !== undefined) applyDanmuSpeed(msg.speed);
                     syncPresetsFromServer(msg.items || []);
                     if (msg.cities) renderCityStats(msg.cities, msg.cities_version, true, msg.cities_day);
+                    if (msg.background) applyBackground(msg.background);
+                    if (msg.music) applyMusic(msg.music);
+                    return;
+                }
+                if (msg.type === 'background') {
+                    applyBackground(msg.url);
+                    return;
+                }
+                if (msg.type === 'music') {
+                    applyMusic(msg);
                     return;
                 }
                 if (msg.type === 'city_stats') {
@@ -744,6 +899,13 @@
             const applyBgUrlBtn = document.getElementById('applyBgUrlBtn');
             const bgFileInput = document.getElementById('bgFileInput');
 
+            const musicModal = document.getElementById('musicModal');
+            const musicBtn = document.getElementById('musicBtn');
+            const closeMusicModal = document.getElementById('closeMusicModal');
+            const musicFileInput = document.getElementById('musicFileInput');
+            const musicToggleBtn = document.getElementById('musicToggleBtn');
+            const musicClearBtn = document.getElementById('musicClearBtn');
+
             const presetModal = document.getElementById('presetModal');
             const presetBtn = document.getElementById('presetBtn');
             const closePresetModal = document.getElementById('closePresetModal');
@@ -830,8 +992,8 @@
                     if (it && Object.prototype.hasOwnProperty.call(counts, it.city)) counts[it.city] = Number(it.count) || 0;
                 });
                 grid.innerHTML = CITY_NAMES.map((city) => `
-                    <div class="flex items-center gap-0.5 px-1 py-px rounded bg-black/40 border border-white/10 leading-none">
-                        <span class="text-[10px] font-medium text-pink-100 whitespace-nowrap">${city}</span>
+                    <div class="flex items-center justify-between gap-1 min-w-0 px-1.5 py-px rounded bg-black/40 border border-white/10 leading-none">
+                        <span class="text-[10px] font-medium text-pink-100 truncate">${city}</span>
                         <span class="text-[10px] font-bold tabular-nums text-white">${counts[city]}</span>
                     </div>
                 `).join('');
@@ -862,11 +1024,13 @@
                 const myCityBtn = document.getElementById('myCityBtn');
                 if (myCityBtn) myCityBtn.remove();
                 bgBtn.classList.remove('hidden');
+                musicBtn.classList.remove('hidden');
                 presetBtn.classList.remove('hidden');
                 speedControl.classList.remove('hidden');
                 clearVisitsBtn.classList.remove('hidden');
                 clearVisitsBtn.classList.add('inline-flex', 'items-center');
                 bgBtn.classList.add('flex');
+                musicBtn.classList.add('flex');
                 presetBtn.classList.add('flex');
                 speedControl.classList.add('flex');
                 speedSlider.addEventListener('input', () => {
@@ -878,6 +1042,7 @@
                 });
             } else {
                 bgBtn.remove();
+                musicBtn.remove();
                 presetBtn.remove();
                 speedControl.remove();
                 clearVisitsBtn.remove();
@@ -914,6 +1079,9 @@
                 bgBtn.addEventListener('click', () => openModal(bgModal));
                 closeBgModal.addEventListener('click', () => closeModal(bgModal));
 
+                musicBtn.addEventListener('click', () => openModal(musicModal));
+                closeMusicModal.addEventListener('click', () => closeModal(musicModal));
+
                 presetBtn.addEventListener('click', () => {
                     renderPresets();
                     openModal(presetModal);
@@ -922,7 +1090,7 @@
             }
 
             // 点击背景弹窗外部关闭
-            [sendModal, bgModal, presetModal].forEach(modal => {
+            [sendModal, bgModal, presetModal, musicModal].forEach(modal => {
                 modal.addEventListener('click', (e) => {
                     if (e.target === modal) closeModal(modal);
                 });
@@ -1096,35 +1264,141 @@
                 closeModal(sendModal);
             });
 
-            // --- 背景更换逻辑 ---
+            // --- 背景更换逻辑：写入服务器，刷新后仍是这张图 ---
+            async function saveBackgroundUrl(url) {
+                const res = await fetch(BASE + '/api/background', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-token': adminToken,
+                    },
+                    body: JSON.stringify({ url }),
+                });
+                if (!res.ok) throw new Error('save failed');
+                const data = await res.json();
+                applyBackground(data.url || url);
+                closeModal(bgModal);
+            }
             bgOptions.forEach(opt => {
-                opt.addEventListener('click', () => {
-                    bgOptions.forEach(o => o.classList.replace('border-pink-500', 'border-transparent'));
-                    opt.classList.replace('border-transparent', 'border-pink-500');
+                opt.addEventListener('click', async () => {
                     const bgUrl = opt.dataset.bg;
-                    bgLayer.style.backgroundImage = `url('${bgUrl}')`;
+                    if (!bgUrl) return;
+                    try {
+                        await saveBackgroundUrl(bgUrl);
+                        bgOptions.forEach(o => o.classList.replace('border-pink-500', 'border-transparent'));
+                        opt.classList.replace('border-transparent', 'border-pink-500');
+                    } catch (_) {
+                        alert('背景没有保存成功，请确认已用管理口令打开本页');
+                    }
                 });
             });
 
-            applyBgUrlBtn.addEventListener('click', () => {
+            applyBgUrlBtn.addEventListener('click', async () => {
                 const url = bgUrlInput.value.trim();
-                if (url) {
-                    bgLayer.style.backgroundImage = `url('${url}')`;
-                    closeModal(bgModal);
+                if (!url) return;
+                try {
+                    await saveBackgroundUrl(url);
+                } catch (_) {
+                    alert('背景没有保存成功，请确认已用管理口令打开本页');
                 }
             });
 
-            bgFileInput.addEventListener('change', (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = (evt) => {
-                        bgLayer.style.backgroundImage = `url('${evt.target.result}')`;
-                        closeModal(bgModal);
-                    };
-                    reader.readAsDataURL(file);
+            bgFileInput.addEventListener('change', async (e) => {
+                const file = e.target.files && e.target.files[0];
+                e.target.value = '';
+                if (!file) return;
+                const body = new FormData();
+                body.append('file', file);
+                try {
+                    const res = await fetch(BASE + '/api/background/upload', {
+                        method: 'POST',
+                        headers: { 'x-admin-token': adminToken },
+                        body,
+                    });
+                    if (!res.ok) throw new Error('upload failed');
+                    const data = await res.json();
+                    applyBackground(data.url);
+                    closeModal(bgModal);
+                } catch (_) {
+                    alert('背景上传失败。请确认已用管理口令打开本页，且图片小于 20MB');
                 }
             });
+
+            // --- 背景音乐：上传 / 播放暂停 / 移除（仅管理页绑定入口） ---
+            async function musicFailText(res) {
+                let detail = '';
+                try {
+                    const data = await res.json();
+                    if (data && typeof data.detail === 'string') detail = data.detail;
+                } catch (_) {}
+                if (res.status === 401 || res.status === 403 || detail === 'forbidden') {
+                    return '请确认已用管理口令打开本页';
+                }
+                if (detail) return detail;
+                return '操作失败。支持 mp3、m4a、aac、ogg、wav、webm，小于 20MB';
+            }
+            if (isAdmin) {
+                musicFileInput.addEventListener('change', async (e) => {
+                    const file = e.target.files && e.target.files[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    const body = new FormData();
+                    body.append('file', file);
+                    try {
+                        const res = await fetch(BASE + '/api/music/upload', {
+                            method: 'POST',
+                            headers: { 'x-admin-token': adminToken },
+                            body,
+                        });
+                        if (!res.ok) {
+                            alert(await musicFailText(res));
+                            return;
+                        }
+                        applyMusic(await res.json());
+                    } catch (_) {
+                        alert('上传失败。支持 mp3、m4a、aac、ogg、wav、webm，小于 20MB。请确认已用管理口令打开本页');
+                    }
+                });
+                musicToggleBtn.addEventListener('click', async () => {
+                    if (!musicState.url) {
+                        const status = document.getElementById('musicStatus');
+                        if (status) status.textContent = '请先上传背景音乐';
+                        return;
+                    }
+                    try {
+                        const res = await fetch(BASE + '/api/music', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-admin-token': adminToken,
+                            },
+                            body: JSON.stringify({ playing: !musicState.playing }),
+                        });
+                        if (!res.ok) {
+                            alert(await musicFailText(res));
+                            return;
+                        }
+                        applyMusic(await res.json());
+                    } catch (_) {
+                        alert('请确认已用管理口令打开本页');
+                    }
+                });
+                musicClearBtn.addEventListener('click', async () => {
+                    try {
+                        const res = await fetch(BASE + '/api/music', {
+                            method: 'DELETE',
+                            headers: { 'x-admin-token': adminToken },
+                        });
+                        if (!res.ok) {
+                            alert(await musicFailText(res));
+                            return;
+                        }
+                        applyMusic(await res.json());
+                    } catch (_) {
+                        alert('请确认已用管理口令打开本页');
+                    }
+                });
+            }
 
             // --- 预设弹幕 & 批量处理 ---
             function renderPresets() {

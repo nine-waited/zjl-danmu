@@ -1,4 +1,5 @@
 import asyncio
+import html
 import hmac
 import ipaddress
 import json
@@ -10,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 DATA_DIR = Path("/data")
@@ -71,6 +72,24 @@ lock = asyncio.Lock()
 stats_version = 0
 # 当前这批计数所属的中国日期。换日时清空昨日记录，从 0 重新计。
 stats_day = ""
+# 当前大屏背景。空字符串表示用页面里的默认图。刷新后从这里恢复。
+background_url = ""
+WALLPAPER_PATH = DATA_DIR / "wallpapers" / "bg.jpg"
+WALLPAPER_MAX_BYTES = 20 * 1024 * 1024
+WALLPAPER_MAX_EDGE = 1920
+MUSIC_DIR = DATA_DIR / "music"
+MUSIC_MAX_BYTES = 20 * 1024 * 1024
+MUSIC_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".webm": "audio/webm",
+}
+music_url = ""
+music_name = ""
+music_playing = False
 
 
 def db() -> sqlite3.Connection:
@@ -81,7 +100,7 @@ def db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    global library, stats_day
+    global library, stats_day, background_url, music_url, music_name, music_playing
     con = db()
     con.execute(
         """
@@ -177,10 +196,157 @@ def init_db() -> None:
             "DELETE FROM danmu WHERE id IN (SELECT id FROM danmu ORDER BY created_at ASC, id ASC LIMIT ?)",
             (excess,),
         )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_setting (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    saved_bg = con.execute("SELECT value FROM app_setting WHERE key = 'background'").fetchone()
+    background_url = str(saved_bg["value"]) if saved_bg else ""
+    saved_music = con.execute("SELECT value FROM app_setting WHERE key = 'music_url'").fetchone()
+    saved_music_name = con.execute("SELECT value FROM app_setting WHERE key = 'music_name'").fetchone()
+    saved_music_on = con.execute("SELECT value FROM app_setting WHERE key = 'music_playing'").fetchone()
+    music_url = str(saved_music["value"]) if saved_music else ""
+    music_name = str(saved_music_name["value"]) if saved_music_name else ""
+    music_playing = bool(saved_music_on and saved_music_on["value"] == "1" and music_url)
     rows = con.execute("SELECT * FROM danmu ORDER BY created_at ASC, id ASC").fetchall()
     con.commit()
     library = [dict(r) for r in rows]
     con.close()
+    prune_stored_media()
+
+
+def index_html() -> HTMLResponse:
+    """把当前壁纸写进首屏，刷新时直接画这张，不再先闪默认图。"""
+    text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    token = html.escape(json.dumps(background_url or ""), quote=True)
+    text = text.replace("%%DANMU_BG_ATTR%%", token)
+    return HTMLResponse(text, headers={"Cache-Control": "no-store"})
+
+
+def _purge_files(directory: Path, keep: Path | None = None) -> None:
+    if not directory.is_dir():
+        return
+    keep_resolved = keep.resolve() if keep is not None else None
+    for item in directory.iterdir():
+        if not item.is_file():
+            continue
+        if keep_resolved is not None and item.resolve() == keep_resolved:
+            continue
+        try:
+            item.unlink()
+        except OSError:
+            pass
+
+
+def uploaded_wallpaper_active(url: str | None = None) -> bool:
+    raw = background_url if url is None else url
+    return str(raw or "").split("?", 1)[0] == "/wallpapers/bg.jpg"
+
+
+def active_music_file() -> Path | None:
+    name = str(music_url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    if not name or name in {".", ".."}:
+        return None
+    dest = (MUSIC_DIR / name).resolve()
+    if dest.parent != MUSIC_DIR.resolve() or dest.suffix.lower() not in MUSIC_TYPES:
+        return None
+    return dest
+
+
+def prune_stored_media() -> None:
+    """预设壁纸是外链。磁盘只留当前这一张上传图、这一首音乐。"""
+    if uploaded_wallpaper_active():
+        _purge_files(WALLPAPER_PATH.parent, keep=WALLPAPER_PATH)
+    else:
+        _purge_files(WALLPAPER_PATH.parent)
+    keep_music = active_music_file()
+    if keep_music is not None and keep_music.is_file():
+        _purge_files(MUSIC_DIR, keep=keep_music)
+        return
+    _purge_files(MUSIC_DIR)
+    if music_url:
+        set_music("", "", False)
+
+
+def set_background(url: str) -> str:
+    global background_url
+    con = db()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO app_setting(key, value) VALUES ('background', ?)",
+            (url,),
+        )
+        con.commit()
+    finally:
+        con.close()
+    background_url = url
+    if uploaded_wallpaper_active(url):
+        _purge_files(WALLPAPER_PATH.parent, keep=WALLPAPER_PATH)
+    else:
+        _purge_files(WALLPAPER_PATH.parent)
+    return url
+
+
+def save_setting(key: str, value: str) -> None:
+    con = db()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO app_setting(key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def music_state() -> dict[str, Any]:
+    return {"url": music_url, "name": music_name, "playing": music_playing}
+
+
+def set_music(url: str, name: str, playing: bool) -> dict[str, Any]:
+    global music_url, music_name, music_playing
+    music_url = url
+    music_name = name
+    music_playing = bool(playing and url)
+    save_setting("music_url", music_url)
+    save_setting("music_name", music_name)
+    save_setting("music_playing", "1" if music_playing else "0")
+    return music_state()
+
+
+def compress_wallpaper(raw: bytes) -> bytes:
+    """最长边压到 1920，存成渐进 JPEG。大屏盖了暗色蒙版，肉眼和原图几乎无差别。"""
+    import io
+
+    from PIL import Image, ImageOps
+
+    image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+    image = image.convert("RGB")
+    width, height = image.size
+    edge = max(width, height)
+    if edge > WALLPAPER_MAX_EDGE:
+        scale = WALLPAPER_MAX_EDGE / edge
+        image = image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    out = io.BytesIO()
+    image.save(out, format="JPEG", quality=82, optimize=True, progressive=True)
+    data = out.getvalue()
+    if len(data) > 450 * 1024:
+        width, height = image.size
+        image = image.resize(
+            (max(1, round(width * 0.85)), max(1, round(height * 0.85))),
+            Image.Resampling.LANCZOS,
+        )
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=78, optimize=True, progressive=True)
+        data = out.getvalue()
+    return data
 
 
 def clamp_speed(value: Any) -> int | None:
@@ -1050,6 +1216,8 @@ async def ws_endpoint(ws: WebSocket):
                     "cities": cities,
                     "cities_version": cities_version,
                     "cities_day": cities_day,
+                    "background": background_url,
+                    "music": music_state(),
                 },
                 ensure_ascii=False,
             )
@@ -1208,15 +1376,135 @@ async def ws_endpoint(ws: WebSocket):
         forget_client(ws)
 
 
+@app.get("/wallpapers/bg.jpg")
+async def wallpaper_file():
+    if not WALLPAPER_PATH.is_file():
+        raise HTTPException(status_code=404, detail="missing")
+    return FileResponse(
+        WALLPAPER_PATH,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/api/background")
+async def get_background():
+    return {"url": background_url}
+
+
+@app.post("/api/background")
+async def set_background_api(payload: dict[str, Any], request: Request):
+    require_admin(request.headers.get("x-admin-token"))
+    url = str(payload.get("url") or "").strip()
+    if not url or len(url) > 2000 or url.startswith("data:"):
+        raise HTTPException(status_code=400, detail="invalid background")
+    async with lock:
+        set_background(url)
+    await broadcast({"type": "background", "url": url})
+    return {"ok": True, "url": url}
+
+
+@app.post("/api/background/upload")
+async def upload_background(request: Request, file: UploadFile = File(...)):
+    require_admin(request.headers.get("x-admin-token"))
+    raw = await file.read(WALLPAPER_MAX_BYTES + 1)
+    if len(raw) > WALLPAPER_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="image too large")
+    try:
+        jpeg = compress_wallpaper(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid image")
+    WALLPAPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _purge_files(WALLPAPER_PATH.parent)
+    tmp = WALLPAPER_PATH.with_suffix(".tmp")
+    tmp.write_bytes(jpeg)
+    tmp.replace(WALLPAPER_PATH)
+    _purge_files(WALLPAPER_PATH.parent, keep=WALLPAPER_PATH)
+    url = f"/wallpapers/bg.jpg?v={int(time.time())}"
+    async with lock:
+        set_background(url)
+    await broadcast({"type": "background", "url": url})
+    return {"ok": True, "url": url, "bytes": len(jpeg)}
+
+
+def _music_path(filename: str) -> Path:
+    path = (MUSIC_DIR / filename).resolve()
+    if path.parent != MUSIC_DIR.resolve() or path.suffix.lower() not in MUSIC_TYPES:
+        raise HTTPException(status_code=404, detail="missing")
+    return path
+
+
+@app.get("/music/{filename}")
+async def music_file(filename: str):
+    path = _music_path(filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="missing")
+    return FileResponse(
+        path,
+        media_type=MUSIC_TYPES[path.suffix.lower()],
+        headers={"Cache-Control": "public, max-age=86400", "Accept-Ranges": "bytes"},
+    )
+
+
+@app.get("/api/music")
+async def get_music():
+    return music_state()
+
+
+@app.post("/api/music")
+async def set_music_api(payload: dict[str, Any], request: Request):
+    require_admin(request.headers.get("x-admin-token"))
+    async with lock:
+        state = set_music(music_url, music_name, bool(payload.get("playing")))
+    await broadcast({"type": "music", **state})
+    return {"ok": True, **state}
+
+
+@app.delete("/api/music")
+async def clear_music(request: Request):
+    require_admin(request.headers.get("x-admin-token"))
+    _purge_files(MUSIC_DIR)
+    async with lock:
+        state = set_music("", "", False)
+    await broadcast({"type": "music", **state})
+    return {"ok": True, **state}
+
+
+@app.post("/api/music/upload")
+async def upload_music(request: Request, file: UploadFile = File(...)):
+    require_admin(request.headers.get("x-admin-token"))
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in MUSIC_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported audio")
+    raw = await file.read(MUSIC_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty audio")
+    if len(raw) > MUSIC_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="audio too large")
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    _purge_files(MUSIC_DIR)
+    dest = MUSIC_DIR / f"bg{suffix}"
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(raw)
+    tmp.replace(dest)
+    _purge_files(MUSIC_DIR, keep=dest)
+    name = Path(file.filename or f"bg{suffix}").name[:80]
+    url = f"/music/bg{suffix}?v={int(time.time())}"
+    async with lock:
+        state = set_music(url, name, True)
+    await broadcast({"type": "music", **state})
+    return {"ok": True, "bytes": len(raw), **state}
+
+
 @app.get("/admin")
 @app.get("/admin/")
 async def admin_page():
-    return FileResponse(STATIC_DIR / "index.html")
+    return index_html()
 
 
 @app.get("/")
 async def root_page():
-    return FileResponse(STATIC_DIR / "index.html")
+    return index_html()
 
 
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
